@@ -7,4 +7,4 @@ plt.show()
 
 flt_year = flt.groupby("year", as_index=False)["passengers"].sum()
 sns.barplot(data=flt_year, x="year", y="passengers")
-plt.show()
+plt.show() 
