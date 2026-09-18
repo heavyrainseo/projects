@@ -13,10 +13,22 @@ sp = flt_year["passengers"].std()
 
 # 개선된 상관 계수 계산
 correlation = flt_year["year"].corr(flt_year["passengers"])
-print(f'r : {correlation:.3f}')
+# 선형회귀 기울기
+a = correlation * flt_year["passengers"].std()/flt_year["year"].std()
+# 선형회귀 절편
+b = flt_year['passengers'].mean() - a * flt_year['year'].mean()
+
+print(f'r : {correlation:.3f}, {a}, {b}')
 sns.barplot(data=flt_year, x="year", y="passengers")
 plt.savefig("flights_barplot.png")
+plt.show()
 
 flt_pivot = flt.pivot(index="month", columns="year", values="passengers")
 sns.heatmap(flt_pivot, annot=True, fmt="d", cmap="YlGnBu")
 plt.savefig("flights_heatmap.png")
+plt.show()
+
+plt.plot(flt_year['year'], flt_year['passengers'])
+plt.plot(flt_year['year'], flt_year['year']*a+b)
+plt.savefig('flights_linearregression.png')
+plt.show()
