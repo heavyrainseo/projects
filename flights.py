@@ -6,10 +6,13 @@ flt = sns.load_dataset("flights")
 flt_year = flt.groupby("year", as_index=False)["passengers"].sum()
 print(flt_year)
 
+# 상관계수 직접 계산
+'''
 sy = flt_year["year"].std()
 sp = flt_year["passengers"].std()
-# cov = flt_year["year"].cov(flt_year["passengers"]) # 기존 라인 주석 처리
-# print(f'r : {cov/(sy*sp)}') # 기존 라인 주석 처리
+cov = flt_year["year"].cov(flt_year["passengers"]) # 기존 라인 주석 처리
+print(f'r : {cov/(sy*sp)}') # 기존 라인 주석 처리
+'''
 
 # 개선된 상관 계수 계산
 correlation = flt_year["year"].corr(flt_year["passengers"])
@@ -18,7 +21,7 @@ a = correlation * flt_year["passengers"].std()/flt_year["year"].std()
 # 선형회귀 절편
 b = flt_year['passengers'].mean() - a * flt_year['year'].mean()
 
-print(f'r : {correlation:.3f}, {a}, {b}')
+print(f'r : {correlation:.3f}, a:{a:.2f}, b:{b:.2f}')
 sns.barplot(data=flt_year, x="year", y="passengers")
 plt.savefig("flights_barplot.png")
 #plt.show()
