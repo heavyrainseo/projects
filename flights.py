@@ -2,8 +2,6 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 flt = sns.load_dataset("flights")
-sns.lineplot(data=flt, x="year", y="passengers", hue="month")
-plt.savefig("flights_lineplot.png")
 
 flt_year = flt.groupby("year", as_index=False)["passengers"].sum()
 print(flt_year)
