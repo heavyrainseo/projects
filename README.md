@@ -6,5 +6,5 @@
 2. uv init
 3. uv add streamlit pandas seaborn plotly
 
-streamlit 파일 실행
+streamlit 파일 실행  
 uv run streamlit run app.py
