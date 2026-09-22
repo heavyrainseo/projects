@@ -7,6 +7,7 @@
 3. "Create codespace on main" 버튼 클릭
 
 ### 초기화 단계  
+터미널에서 아래 명령 입력  
 1. `pip install uv`
 2. `uv init`
 3. `uv add streamlit pandas seaborn plotly`
