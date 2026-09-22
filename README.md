@@ -1,6 +1,11 @@
 # projects
 ## 빅데이터프로그래밍응용 수업
 
+### Codespace 실행  
+1. **projects** Repo 선택
+2. "<> Code" 버튼 - Codespaces 탭 선택
+3. "Create codespace on main" 버튼 클릭
+
 ### 초기화 단계  
 1. `pip install uv`
 2. `uv init`
