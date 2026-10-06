@@ -24,6 +24,15 @@
 1. Google Genimi를 선택 후 API 키를 붙여 넣기
 1. config.yaml 파일에서 Gemini 버전을 2.5에서 현재 지원하는 버전(3 등)으로 수정
 
+### git 충돌날 때
+
+`git pull --rebase origin main`  
+`git push origin main`
+
+이후 기본값으로 쓰려면  
+`git config --global pull.rebase true`  
+
+
 ### matplotlib, seaborn 차트 한글 사용
 쉬운 방법 - koreanize_matplotlib 사용  
 아래 모듈을 설치한다.
