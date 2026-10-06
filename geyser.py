@@ -1,148 +1,236 @@
-import streamlit as st
 import seaborn as sns
-import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np
+import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
-# 페이지 설정
+from geyser_analysis import filter_data, fit_linear_regression
+
 st.set_page_config(
-    page_title="Geyser Data Analysis Dashboard",
+    page_title="Old Faithful 대시보드",
     page_icon="🌋",
-    layout="wide"
+    layout="wide",
 )
 
-# 데이터 로드 함수
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 2rem; padding-bottom: 3rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
 @st.cache_data
 def load_data():
-    df = sns.load_dataset('geyser')
-    return df
+    return sns.load_dataset("geyser")
 
-df = load_data()
 
-# 사이드바 구성
-st.sidebar.title("🌋 Geyser 분석기")
-st.sidebar.markdown("Old Faithful 간헐천 데이터를 분석하고 예측합니다.")
-menu = st.sidebar.radio("이동할 페이지", ["데이터 개요", "시각적 분석", "분출 시간 예측 모델"])
+try:
+    df = load_data()
+except (OSError, ValueError) as exc:
+    st.error(f"간헐천 데이터를 불러오지 못했습니다. 네트워크 연결을 확인해 주세요. ({exc})")
+    st.stop()
 
-# 1. 데이터 개요 페이지
-if menu == "데이터 개요":
-    st.title("📊 데이터 개요")
-    st.markdown("""
-    Seaborn의 **geyser** 데이터셋은 미국 옐로스톤 국립공원에 있는 'Old Faithful' 간헐천의 분출 정보를 담고 있습니다.
-    - **duration**: 분출 지속 시간 (분)
-    - **waiting**: 다음 분출까지의 대기 시간 (분)
-    - **kind**: 분출의 종류 (long, short)
-    """)
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Raw Data (상위 10개)")
-        st.dataframe(df.head(10), use_container_width=True)
-        
-    with col2:
-        st.subheader("기초 통계량")
-        st.write(df.describe())
+required_columns = {"duration", "waiting", "kind"}
+missing_columns = required_columns.difference(df.columns)
+if missing_columns:
+    st.error(f"데이터에 필요한 열이 없습니다: {', '.join(sorted(missing_columns))}")
+    st.stop()
 
-    st.subheader("데이터 분포 요약")
-    kinds = ", ".join(df['kind'].unique().tolist())
-    st.info(f"전체 데이터 개수: {len(df)}개 / 분출 종류: {kinds}")
+if df.empty or df[list(required_columns)].isna().any().any():
+    st.error("분석할 데이터가 비어 있거나 필수 항목에 결측치가 있습니다.")
+    st.stop()
 
-    st.subheader("종류별 심층 분석")
-    col_stats, col_hist = st.columns([1, 2])
+st.sidebar.title("🌋 Old Faithful")
+st.sidebar.caption("옐로스톤 간헐천 분출 데이터 탐색")
+st.sidebar.subheader("데이터 필터")
 
-    with col_stats:
-        st.markdown("**기초 통계량 (kind별)**")
-        grouped_stats = df.groupby('kind').describe().T
-        st.dataframe(grouped_stats, use_container_width=True)
+kinds = sorted(df["kind"].unique().tolist())
+selected_kinds = st.sidebar.multiselect(
+    "분출 유형",
+    options=kinds,
+    default=kinds,
+)
+duration_bounds = (
+    float(df["duration"].min()),
+    float(df["duration"].max()),
+)
+duration_range = st.sidebar.slider(
+    "분출 지속 시간 (분)",
+    min_value=duration_bounds[0],
+    max_value=duration_bounds[1],
+    value=duration_bounds,
+    step=0.1,
+)
+waiting_bounds = (
+    float(df["waiting"].min()),
+    float(df["waiting"].max()),
+)
+waiting_range = st.sidebar.slider(
+    "다음 분출까지 대기 시간 (분)",
+    min_value=waiting_bounds[0],
+    max_value=waiting_bounds[1],
+    value=waiting_bounds,
+    step=1.0,
+)
 
-    with col_hist:
-        st.markdown("**분출 지속 시간(duration) 분포 비교**")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.histplot(data=df, x='duration', hue='kind', kde=True, element="step", ax=ax)
-        st.pyplot(fig)
+filtered_df = filter_data(
+    df,
+    selected_kinds,
+    duration_range,
+    waiting_range,
+)
 
-# 2. 시각적 분석 페이지
-elif menu == "시각적 분석":
-    st.title("🎨 시각적 탐색 분석 (EDA)")
-    
-    plot_type = st.segmented_control(
-        "그래프 종류를 선택하세요",
-        ["Scatter Plot (산점도)", "Joint Plot (결합 분포)", "KDE Plot (밀도 추정)"],
-        default="Scatter Plot (산점도)",
+st.title("Old Faithful 간헐천 데이터 대시보드")
+st.caption(
+    "분출 지속 시간과 다음 분출까지의 대기 시간을 살펴보고, "
+    "필터 결과를 바탕으로 간단한 선형 회귀 예측을 확인합니다."
+)
+
+metric_columns = st.columns(4)
+metric_columns[0].metric("관측 횟수", f"{len(filtered_df):,}")
+if filtered_df.empty:
+    metric_columns[1].metric("평균 분출 시간", "—")
+    metric_columns[2].metric("평균 대기 시간", "—")
+    metric_columns[3].metric("분출 유형 수", "0")
+else:
+    metric_columns[1].metric(
+        "평균 분출 시간",
+        f"{filtered_df['duration'].mean():.2f}분",
     )
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    if plot_type == "Scatter Plot (산점도)":
-        st.subheader("대기 시간 vs 분출 지속 시간")
-        sns.scatterplot(data=df, x='waiting', y='duration', hue='kind', style='kind', s=100, ax=ax)
-        st.pyplot(fig)
-        st.write("대기 시간과 분출 지속 시간 사이에 뚜렷한 군집(Cluster)이 형성됨을 알 수 있습니다.")
-        
-    elif plot_type == "Joint Plot (결합 분포)":
-        st.subheader("변수별 분포와 상관관계")
-        g = sns.jointplot(data=df, x='waiting', y='duration', hue='kind', kind='kde', fill=True, alpha=0.5)
-        st.pyplot(g.fig)
-        
-    elif plot_type == "KDE Plot (밀도 추정)":
-        st.subheader("데이터 밀도 (2D KDE)")
-        sns.kdeplot(data=df, x='waiting', y='duration', hue='kind', fill=True, ax=ax)
-        st.pyplot(fig)
+    metric_columns[2].metric(
+        "평균 대기 시간",
+        f"{filtered_df['waiting'].mean():.1f}분",
+    )
+    metric_columns[3].metric("분출 유형 수", str(filtered_df["kind"].nunique()))
 
-# 3. 예측 모델 페이지
-elif menu == "분출 시간 예측 모델":
-    st.title("🤖 분출 시간(Duration) 예측 (수학 공식 활용)")
-    st.markdown("단순 선형 회귀 공식을 사용하여 대기 시간(`waiting`)에 따른 분출 시간(`duration`)을 예측합니다.")
+st.divider()
 
-    # 변수 설정
-    x = df['waiting']
-    y = df['duration']
+if filtered_df.empty:
+    st.info("선택한 조건에 해당하는 데이터가 없습니다. 사이드바 필터를 조정해 주세요.")
+else:
+    st.subheader("분출 데이터 탐색")
+    scatter_tab, distribution_tab = st.tabs(["대기 시간과 분출 시간", "분포 비교"])
 
-    # 통계량 계산
-    mean_x = x.mean()
-    mean_y = y.mean()
-    std_x = x.std()
-    std_y = y.std()
-    r = x.corr(y) # 상관계수
+    with scatter_tab:
+        scatter = px.scatter(
+            filtered_df,
+            x="waiting",
+            y="duration",
+            color="kind",
+            labels={
+                "waiting": "다음 분출까지 대기 시간 (분)",
+                "duration": "분출 지속 시간 (분)",
+                "kind": "분출 유형",
+            },
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            hover_data={"waiting": ":.1f", "duration": ":.2f"},
+        )
+        scatter.update_layout(
+            legend_title_text="분출 유형",
+            margin=dict(l=10, r=10, t=25, b=10),
+        )
+        st.plotly_chart(scatter, width="stretch")
 
-    # 기울기(slope)와 절편(intercept) 계산
-    # 공식: slope = r * (std_y / std_x)
-    # 공식: intercept = mean_y - (slope * mean_x)
-    slope = r * (std_y / std_x)
-    intercept = mean_y - (slope * mean_x)
-    
-    # 결정계수 (R-squared) - 단순 선형 회귀에서는 상관계수의 제곱
-    r2 = r ** 2
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("🔍 예측 계산기")
-        input_waiting = st.slider("현재 대기 시간(waiting)을 입력하세요 (분)", 
-                                  min_value=int(x.min()), 
-                                  max_value=int(x.max()), 
-                                  value=int(mean_x))
-        
-        # 예측 수행: y = ax + b
-        predicted_duration = (slope * input_waiting) + intercept
-        
-        st.metric(label="예상 분출 시간 (Duration)", value=f"{predicted_duration:.2f} 분")
-        
-        with st.expander("사용한 수학 공식 보기"):
-            st.latex(r"a (기울기) = r \times \frac{\sigma_y}{\sigma_x}")
-            st.latex(r"b (절편) = \bar{y} - a\bar{x}")
-            st.latex(f"y = {slope:.4f}x + ({intercept:.4f})")
-            st.write(f"- 상관계수(r): {r:.4f}")
-            st.write(f"- 모델 설명력 (R²): {r2:.4f}")
+    with distribution_tab:
+        duration_chart = px.histogram(
+            filtered_df,
+            x="duration",
+            color="kind",
+            barmode="overlay",
+            opacity=0.7,
+            labels={
+                "duration": "분출 지속 시간 (분)",
+                "count": "관측 수",
+                "kind": "분출 유형",
+            },
+            color_discrete_sequence=px.colors.qualitative.Set2,
+        )
+        duration_chart.update_layout(
+            legend_title_text="분출 유형",
+            margin=dict(l=10, r=10, t=25, b=10),
+        )
+        st.plotly_chart(duration_chart, width="stretch")
 
-    with col2:
-        st.subheader("📈 회귀 분석 시각화")
-        fig2, ax2 = plt.subplots()
-        sns.regplot(data=df, x='waiting', y='duration', scatter_kws={'alpha':0.5}, line_kws={'color':'red'}, ax=ax2)
-        # 사용자가 입력한 값 표시
-        ax2.scatter(input_waiting, predicted_duration, color='green', s=150, edgecolors='black', label='Your Input', zorder=5)
-        ax2.legend()
-        st.pyplot(fig2)
+    st.subheader("필터링된 관측 데이터")
+    display_df = filtered_df.rename(
+        columns={
+            "duration": "분출 지속 시간 (분)",
+            "waiting": "다음 분출까지 대기 시간 (분)",
+            "kind": "분출 유형",
+        }
+    )
+    st.dataframe(display_df, width="stretch", hide_index=True)
+    st.download_button(
+        "필터 결과 CSV 다운로드",
+        data=display_df.to_csv(index=False).encode("utf-8-sig"),
+        file_name="geyser_filtered.csv",
+        mime="text/csv",
+        width="stretch",
+    )
 
-    st.success(f"대기 시간이 {input_waiting}분일 때, 계산된 예상 분출 시간은 약 {predicted_duration:.2f}분입니다.")
+    st.divider()
+    st.subheader("대기 시간으로 분출 시간 예측")
+    if filtered_df["waiting"].nunique() < 2:
+        st.info("회귀 예측을 하려면 필터 결과에 서로 다른 대기 시간이 두 개 이상 필요합니다.")
+    else:
+        slope, intercept, r_squared = fit_linear_regression(filtered_df)
+        minimum_waiting = float(filtered_df["waiting"].min())
+        maximum_waiting = float(filtered_df["waiting"].max())
+
+        prediction_columns = st.columns([1, 2])
+        with prediction_columns[0]:
+            input_waiting = st.slider(
+                "예측할 대기 시간 (분)",
+                min_value=minimum_waiting,
+                max_value=maximum_waiting,
+                value=float(filtered_df["waiting"].mean()),
+                step=0.5,
+            )
+            predicted_duration = slope * input_waiting + intercept
+            st.metric("예상 분출 지속 시간", f"{predicted_duration:.2f}분")
+            st.metric("모델 설명력 (R²)", f"{r_squared:.3f}")
+
+        with prediction_columns[1]:
+            prediction_chart = px.scatter(
+                filtered_df,
+                x="waiting",
+                y="duration",
+                color="kind",
+                labels={
+                    "waiting": "다음 분출까지 대기 시간 (분)",
+                    "duration": "분출 지속 시간 (분)",
+                    "kind": "분출 유형",
+                },
+                color_discrete_sequence=px.colors.qualitative.Set2,
+            )
+            line_x = [minimum_waiting, maximum_waiting]
+            prediction_chart.add_trace(
+                go.Scatter(
+                    x=line_x,
+                    y=[slope * value + intercept for value in line_x],
+                    mode="lines",
+                    name="선형 회귀 추세선",
+                    line=dict(color="#EF553B", width=3),
+                )
+            )
+            prediction_chart.add_trace(
+                go.Scatter(
+                    x=[input_waiting],
+                    y=[predicted_duration],
+                    mode="markers",
+                    name="선택한 예측값",
+                    marker=dict(color="#222222", size=12, symbol="diamond"),
+                )
+            )
+            prediction_chart.update_layout(
+                legend_title_text="분출 유형",
+                margin=dict(l=10, r=10, t=25, b=10),
+            )
+            st.plotly_chart(prediction_chart, width="stretch")
+
+        st.caption(
+            f"선형 회귀식: 분출 시간 = {slope:.4f} × 대기 시간 + ({intercept:.4f}). "
+            "예측은 선택한 필터 결과로 계산됩니다."
+        )

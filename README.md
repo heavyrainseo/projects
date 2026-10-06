@@ -15,7 +15,7 @@
 3. `uv add streamlit pandas seaborn plotly`   
 
 ### streamlit 파일 실행  
-`uv run streamlit run app.py`
+`uv run streamlit run geyser.py`
 
 ### Google gemini flash 추가 방법
 1. Continue 확장 설치
