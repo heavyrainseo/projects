@@ -1,184 +1,260 @@
 import os
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(APP_DIR, "data")
-INPUT_PATH = os.path.join(DATA_DIR, "pension_raw.csv")
-OUTPUT_PATH = os.path.join(DATA_DIR, "cleaned_pension.csv")
+DATA_PATH = os.path.join(APP_DIR, "data", "cleaned_pension.csv")
 
-STATUS_COLUMN = "사업장가입상태코드 1 등록 2 탈퇴"
-TYPE_COLUMN = "사업장형태구분코드 1 법인 2 개인"
+PENSION_RATE = 0.095
+SALARY_CAP = 6_590_000
 
-REQUIRED_COLUMNS = [
-    "사업장명",
-    STATUS_COLUMN,
-    "사업장도로명상세주소",
-    "법정동주소광역시도코드",
-    "사업장업종코드명",
-    "가입자수",
-    "당월고지금액",
-    TYPE_COLUMN,
-    "신규취득자수",
-    "상실가입자수",
-]
+REQUIRED_COLUMNS = {
+    "company_name",
+    "company_type",
+    "industry",
+    "sido",
+    "status",
+    "member_count",
+    "estimated_salary_per",
+    "new_members",
+    "lost_members",
+}
 
 
 @st.cache_data
 def load_data(file_path: str) -> pd.DataFrame:
-    try:
-        return pd.read_csv(file_path, encoding="cp949")
-    except UnicodeDecodeError:
-        return pd.read_csv(file_path, encoding="utf-8-sig")
-
-
-def preview_step(step_name: str, message: str, data: pd.DataFrame) -> None:
-    with st.expander(step_name, expanded=True):
-        st.success(message)
-        st.dataframe(data.head(10), width="stretch")
+    return pd.read_csv(file_path, encoding="utf-8-sig")
 
 
 def main() -> None:
-    st.set_page_config(page_title="국민연금 사업장 데이터 전처리", layout="wide")
-    st.title("📋 국민연금 사업장 데이터 전처리")
+    st.set_page_config(page_title="📋 국민연금 사업장 분석 대시보드", layout="wide")
+    st.title("📋 국민연금 사업장 분석 대시보드")
 
     try:
-        raw_data = load_data(INPUT_PATH)
+        data = load_data(DATA_PATH)
     except FileNotFoundError:
-        st.error(f"원본 CSV 파일을 찾을 수 없습니다: {INPUT_PATH}")
+        st.error(f"정제된 CSV 파일을 찾을 수 없습니다: {DATA_PATH}")
         st.stop()
 
-    missing_columns = [column for column in REQUIRED_COLUMNS if column not in raw_data.columns]
+    missing_columns = REQUIRED_COLUMNS.difference(data.columns)
     if missing_columns:
-        st.error(f"원본 CSV에 필요한 컬럼이 없습니다: {', '.join(missing_columns)}")
+        st.error(f"정제된 CSV에 필요한 컬럼이 없습니다: {', '.join(sorted(missing_columns))}")
         st.stop()
 
-    stage_previews: list[tuple[str, str, pd.DataFrame]] = [
-        ("1단계. CSV 읽기", f"원본 CSV를 읽었습니다. 전체 {len(raw_data):,}행입니다.", raw_data.head(10))
-    ]
-
-    data = raw_data.loc[:, REQUIRED_COLUMNS].copy()
-    stage_previews.append(
-        (
-            "2단계. 필요한 컬럼만 선택",
-            f"후속 전처리에 필요한 {len(REQUIRED_COLUMNS)}개 컬럼만 선택했습니다.",
-            data.head(10),
-        )
+    registered_data = data.loc[data["status"].eq("등록")].copy()
+    registered_data["member_count"] = pd.to_numeric(
+        registered_data["member_count"], errors="coerce"
+    ).fillna(0)
+    registered_data["estimated_salary_per"] = pd.to_numeric(
+        registered_data["estimated_salary_per"], errors="coerce"
+    ).fillna(0).clip(upper=SALARY_CAP)
+    registered_data["estimated_salary_per"] = registered_data[
+        "estimated_salary_per"
+    ].where(registered_data["member_count"].gt(0), 0)
+    for column in ("new_members", "lost_members"):
+        registered_data[column] = pd.to_numeric(
+            registered_data[column], errors="coerce"
+        ).fillna(0)
+    registered_data["net_change"] = (
+        registered_data["new_members"] - registered_data["lost_members"]
     )
 
-    data = data.rename(
+    total_members = registered_data["member_count"].sum()
+    average_monthly_salary = registered_data["estimated_salary_per"].mean()
+    if pd.isna(average_monthly_salary):
+        average_monthly_salary = 0
+
+    if "year_month" in registered_data.columns:
+        year_month_values = registered_data["year_month"].dropna().astype(str).str.strip()
+        latest_year_month = (
+            year_month_values.max() if not year_month_values.empty else "정보 없음"
+        )
+    else:
+        latest_year_month = "정보 없음"
+
+    total_companies_metric, total_members_metric, average_salary_metric, year_month_metric = (
+        st.columns(4)
+    )
+    total_companies_metric.metric("총 등록 사업장 수", f"{len(registered_data):,}")
+    total_members_metric.metric("총 가입자 수", f"{total_members:,.0f}")
+    average_salary_metric.metric(
+        "전국 평균 1인당 추정 월급여", f"{average_monthly_salary:,.0f}원"
+    )
+    year_month_metric.metric("데이터 기준 연월", latest_year_month)
+
+    with st.sidebar:
+        st.subheader("지역 선택")
+        sido_options = sorted(data["sido"].dropna().astype(str).unique().tolist())
+        selected_sido = st.selectbox("시도", options=sido_options)
+
+        st.subheader("분석 필터")
+        selected_company_type = st.selectbox("사업장 형태", options=["전체", "법인", "개인"])
+        minimum_members = st.slider("최소 가입자 수", min_value=1, max_value=100, value=1)
+
+    region_data = registered_data.loc[registered_data["sido"].eq(selected_sido)]
+    region_average_salary = region_data["estimated_salary_per"].mean()
+    if pd.isna(region_average_salary):
+        region_average_salary = 0
+    salary_delta = region_average_salary - average_monthly_salary
+
+    filtered_data = region_data.loc[
+        region_data["member_count"].ge(minimum_members)
+    ]
+    if selected_company_type != "전체":
+        filtered_data = filtered_data.loc[
+            filtered_data["company_type"].eq(selected_company_type)
+        ]
+
+    st.divider()
+    st.subheader(f"{selected_sido} 사업장 분석")
+
+    st.markdown("#### 지역 요약 지표")
+    region_summary = st.columns(4)
+    region_summary[0].metric("해당 시도 사업장 수", f"{len(region_data):,}")
+    region_summary[1].metric(
+        "해당 시도 총 가입자 수",
+        f"{region_data['member_count'].sum():,.0f}",
+    )
+    region_summary[2].metric(
+        "해당 시도 평균 1인당 추정 월급여",
+        f"{region_average_salary:,.0f}원",
+        delta=f"{salary_delta:+,.0f}원",
+        delta_color="normal",
+    )
+    region_summary[3].metric(
+        "전국 평균 대비 차이",
+        f"{salary_delta:+,.0f}원",
+    )
+
+    filtered_members = filtered_data["member_count"].sum()
+    filtered_average_salary = filtered_data["estimated_salary_per"].mean()
+    if pd.isna(filtered_average_salary):
+        filtered_average_salary = 0
+    summary_columns = st.columns(4)
+    summary_columns[0].metric("조건에 맞는 사업장 수", f"{len(filtered_data):,}")
+    summary_columns[1].metric("조건에 맞는 가입자 수", f"{filtered_members:,.0f}")
+    summary_columns[2].metric(
+        "1인당 추정 월급여", f"{filtered_average_salary:,.0f}원"
+    )
+    summary_columns[3].metric(
+        "가입자 순증감",
+        f"{filtered_data['net_change'].sum():,.0f}명",
+    )
+
+    if filtered_data.empty:
+        st.info("선택한 조건에 해당하는 등록 사업장이 없습니다.")
+        return
+
+    industry_data = filtered_data.assign(
+        industry=filtered_data["industry"].fillna("미분류")
+    )
+    industry_company_counts = (
+        industry_data.groupby("industry")
+        .size()
+        .nlargest(10)
+        .sort_values()
+        .rename("사업장 수")
+        .rename_axis("industry")
+        .reset_index()
+    )
+    company_count_fig = px.bar(
+        industry_company_counts,
+        x="사업장 수",
+        y="industry",
+        orientation="h",
+        title="선택 시도 업종별 사업장 수 TOP 10",
+        labels={"industry": "업종명"},
+        category_orders={
+            "industry": industry_company_counts["industry"].tolist(),
+        },
+    )
+    company_count_fig.update_yaxes(categoryorder="array")
+
+    industry_salary_averages = (
+        industry_data.groupby("industry")["estimated_salary_per"]
+        .mean()
+        .nlargest(10)
+        .sort_values()
+        .rename("평균 추정 월급여")
+        .rename_axis("industry")
+        .reset_index()
+    )
+    salary_fig = px.bar(
+        industry_salary_averages,
+        x="평균 추정 월급여",
+        y="industry",
+        orientation="h",
+        title="선택 시도 업종별 평균 추정 월급여 TOP 10",
+        labels={"industry": "업종명"},
+        text="평균 추정 월급여",
+        category_orders={
+            "industry": industry_salary_averages["industry"].tolist(),
+        },
+    )
+    salary_fig.update_traces(
+        texttemplate="%{x:,.0f}원",
+        textposition="outside",
+        cliponaxis=False,
+    )
+    salary_fig.add_vline(
+        x=SALARY_CAP,
+        line_dash="dash",
+        line_color="red",
+        annotation_text="기준소득 상한액",
+        annotation_position="top",
+    )
+    company_chart_column, salary_chart_column = st.columns(2)
+    company_chart_column.plotly_chart(
+        company_count_fig, use_container_width=True
+    )
+    salary_chart_column.plotly_chart(salary_fig, use_container_width=True)
+
+    chart_column, type_column = st.columns(2)
+    industry_summary = (
+        filtered_data.assign(industry=filtered_data["industry"].fillna("미분류"))
+        .groupby("industry")["member_count"]
+        .sum()
+        .nlargest(10)
+        .sort_values()
+        .rename("가입자 수")
+    )
+    chart_column.subheader("업종별 가입자 수 TOP 10")
+    chart_column.bar_chart(industry_summary)
+
+    type_summary = (
+        filtered_data["company_type"]
+        .fillna("미분류")
+        .value_counts()
+        .rename_axis("사업장 형태")
+        .rename("사업장 수")
+    )
+    type_column.subheader("사업장 형태별 사업장 수")
+    type_column.bar_chart(type_summary)
+
+    st.subheader("가입자 수 상위 사업장 TOP 10")
+    top_companies = filtered_data.nlargest(10, "member_count")[
+        ["company_name", "industry", "company_type", "member_count", "estimated_salary_per"]
+    ].rename(
         columns={
-            "사업장명": "company_name",
-            STATUS_COLUMN: "status_code",
-            "사업장도로명상세주소": "address",
-            "법정동주소광역시도코드": "sido_code",
-            "사업장업종코드명": "industry",
-            "가입자수": "member_count",
-            "당월고지금액": "charge_amount",
-            TYPE_COLUMN: "type_code",
-            "신규취득자수": "new_members",
-            "상실가입자수": "lost_members",
+            "company_name": "사업장명",
+            "industry": "업종",
+            "company_type": "사업장 형태",
+            "member_count": "가입자 수",
+            "estimated_salary_per": "1인당 추정 월급여",
         }
     )
-    stage_previews.append(
-        ("3단계. 컬럼명 영문으로 변경", "선택한 컬럼명을 영문으로 변경했습니다.", data.head(10))
+    st.dataframe(
+        top_companies,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "가입자 수": st.column_config.NumberColumn(format="%,d명"),
+            "1인당 추정 월급여": st.column_config.NumberColumn(format="%,d원"),
+        },
     )
-
-    data["status"] = data["status_code"].map({1: "등록", 2: "탈퇴"})
-    data["company_type"] = data["type_code"].map({1: "법인", 2: "개인"})
-    data = data.drop(columns=["status_code", "type_code"])
-    stage_previews.append(
-        (
-            "4단계. 코드값을 텍스트로 변환",
-            "가입 상태와 사업장 형태 코드를 텍스트로 변환했습니다.",
-            data.head(10),
-        )
-    )
-
-    data["sido"] = data["address"].str.split().str[0]
-    data = data.drop(columns=["address", "sido_code"])
-    stage_previews.append(
-        ("5단계. 시도명 추출", "도로명 주소에서 시도명을 추출했습니다.", data.head(10))
-    )
-
-    numeric_columns = [
-        "member_count",
-        "charge_amount",
-        "new_members",
-        "lost_members",
-    ]
-    for column in numeric_columns:
-        data[column] = pd.to_numeric(data[column], errors="coerce").fillna(0)
-    stage_previews.append(
-        (
-            "6단계. 숫자 컬럼 타입 변환",
-            "가입자·고지 금액·신규 취득·상실 가입자 컬럼을 숫자형으로 변환했습니다. "
-            "변환할 수 없는 값은 0으로 처리했습니다.",
-            data.head(10),
-        )
-    )
-
-    data["estimated_salary_total"] = data["charge_amount"] / 0.095
-    data["estimated_salary_per"] = (
-        data["estimated_salary_total"]
-        .div(data["member_count"])
-        .where(data["member_count"].ne(0), 0)
-    )
-    data["net_change"] = data["new_members"] - data["lost_members"]
-    stage_previews.append(
-        ("7단계. 파생 컬럼 생성", "추정 급여와 순증감 컬럼을 생성했습니다.", data.head(10))
-    )
-
-    data = data.loc[
-        (data["status"] == "등록")
-        & (data["member_count"] > 0)
-        & (data["charge_amount"] > 0)
-    ].copy()
-    stage_previews.append(
-        (
-            "8단계. 이상값 처리",
-            f"등록 상태이며 가입자 수와 당월 고지 금액이 0보다 큰 행만 유지했습니다. "
-            f"남은 행: {len(data):,}개",
-            data.head(10),
-        )
-    )
-
-    os.makedirs(DATA_DIR, exist_ok=True)
-    try:
-        data.to_csv(OUTPUT_PATH, encoding="utf-8", index=False)
-    except OSError as error:
-        st.error(f"전처리 결과를 저장하지 못했습니다: {error}")
-        st.stop()
-
-    stage_previews.append(
-        (
-            "9단계. 전처리 결과 저장",
-            f"전처리된 데이터를 저장했습니다: {OUTPUT_PATH}",
-            data.head(10),
-        )
-    )
-
-    before_metric, after_metric = st.columns(2)
-    before_metric.metric("전처리 전 행 수", f"{len(raw_data):,}")
-    after_metric.metric("전처리 후 행 수", f"{len(data):,}")
-
-    for step_name, message, preview in stage_previews:
-        preview_step(step_name, message, preview)
-
-    st.success("cleaned_pension.csv 저장이 완료되었습니다.")
-
-    st.subheader("전처리 데이터 기본 통계")
-    total_salary = data["estimated_salary_total"].sum()
-    total_members = data["member_count"].sum()
-    overall_salary_per_member = total_salary / total_members if total_members else 0
-
-    total_companies, sido_count, member_count, average_salary = st.columns(4)
-    total_companies.metric("총 사업장 수", f"{len(data):,}")
-    sido_count.metric("시도 수", f"{data['sido'].nunique():,}")
-    member_count.metric("총 가입자 수", f"{total_members:,.0f}")
-    average_salary.metric("전체 1인당 추정 평균 월급여", f"{overall_salary_per_member:,.0f}원")
 
 
 if __name__ == "__main__":
